@@ -35,3 +35,4 @@ exports.incrementViews = async (req, res) => {
 
   res.status(200).json({ message: 'View count incremented' });
 };
+

@@ -1,0 +1,139 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        cd services/auth && npm ci
+        cd ../blog && npm ci
+        cd ../comment && npm ci
+        cd ../profile && npm ci
+        cd ../../api-gateway && npm ci
+    
+    - name: Run tests
+      run: |
+        cd services/auth && npm test
+        cd ../blog && npm test
+        cd ../comment && npm test
+        cd ../profile && npm test
+        cd ../../api-gateway && npm test
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run SNYK security scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    
+    - name: Run container security scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
+        exit-code: '1'
+        ignore-unfixed: true
+        severity: 'CRITICAL,HIGH'
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build and push Auth Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./services/auth
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/auth-service:${{ github.sha }}
+    
+    - name: Build and push Blog Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./services/blog
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/blog-service:${{ github.sha }}
+    
+    - name: Build and push Comment Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./services/comment
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/comment-service:${{ github.sha }}
+    
+    - name: Build and push Profile Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./services/profile
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/profile-service:${{ github.sha }}
+    
+    - name: Build and push API Gateway
+      uses: docker/build-push-action@v4
+      with:
+        context: ./api-gateway
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/api-gateway:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Update deployment files
+      run: |
+        # Update image tags in docker-compose.yml
+        sed -i "s|build: ./api-gateway|image: ${{ secrets.DOCKERHUB_USERNAME }}/api-gateway:${{ github.sha }}|g" docker-compose.yml
+        sed -i "s|build: ./services/auth|image: ${{ secrets.DOCKERHUB_USERNAME }}/auth-service:${{ github.sha }}|g" docker-compose.yml
+        sed -i "s|build: ./services/blog|image: ${{ secrets.DOCKERHUB_USERNAME }}/blog-service:${{ github.sha }}|g" docker-compose.yml
+        sed -i "s|build: ./services/comment|image: ${{ secrets.DOCKERHUB_USERNAME }}/comment-service:${{ github.sha }}|g" docker-compose.yml
+        sed -i "s|build: ./services/profile|image: ${{ secrets.DOCKERHUB_USERNAME }}/profile-service:${{ github.sha }}|g" docker-compose.yml
+    
+    - name: Deploy to production
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USERNAME }}
+        key: ${{ secrets.DEPLOY_KEY }}
+        script: |
+          cd /opt/microservices
+          docker-compose pull
+          docker-compose up -d
+          docker system prune -af 

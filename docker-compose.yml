@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - AUTH_SERVICE_URL=http://auth:3001
+      - BLOG_SERVICE_URL=http://blog:3002
+      - COMMENT_SERVICE_URL=http://comment:3003
+      - PROFILE_SERVICE_URL=http://profile:3004
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      auth:
+        condition: service_healthy
+      blog:
+        condition: service_healthy
+      comment:
+        condition: service_healthy
+      profile:
+        condition: service_healthy
+    secrets:
+      - jwt_secret
+
+  auth:
+    build: ./services/auth
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGO_URI=mongodb://mongodb:27017/auth_service
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+    networks:
+      - backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    secrets:
+      - jwt_secret
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  blog:
+    build: ./services/blog
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGO_URI=mongodb://mongodb:27017/blog_service
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+    networks:
+      - backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    secrets:
+      - jwt_secret
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  comment:
+    build: ./services/comment
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - MONGO_URI=mongodb://mongodb:27017/comment_service
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+    networks:
+      - backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    secrets:
+      - jwt_secret
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  profile:
+    build: ./services/profile
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - MONGO_URI=mongodb://mongodb:27017/profile_service
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+    networks:
+      - backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    secrets:
+      - jwt_secret
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+
+secrets:
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt 
